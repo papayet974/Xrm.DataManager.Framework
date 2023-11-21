@@ -1,222 +1,221 @@
-﻿using Microsoft.Xrm.Sdk;
+﻿using Microsoft.IdentityModel.Tokens;
+using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Query;
 using Microsoft.Xrm.Tooling.Connector;
 using System;
-using System.IdentityModel.Tokens;
 using System.Linq;
 using System.ServiceModel;
 using System.ServiceModel.Security;
 
-namespace Xrm.DataManager.Framework
+namespace Xrm.DataManager.Framework;
+
+public class ManagedTokenOrganizationServiceProxy : IManagedTokenOrganizationServiceProxy
 {
-    public class ManagedTokenOrganizationServiceProxy : IManagedTokenOrganizationServiceProxy
+    private string CrmConnectionString;
+
+    public CrmServiceClient CrmServiceClient
     {
-        private string CrmConnectionString;
+        get;
+        set;
+    }
 
-        public CrmServiceClient CrmServiceClient
+    private CrmServiceClient ParentCrmServiceClient
+    {
+        get;
+        set;
+    }
+
+    public Guid CallerId
+    {
+        get;
+        set;
+    }
+
+    public string EndpointUrl
+    {
+        get;
+        set;
+    }
+
+    public string ActiveAuthenticationType
+    {
+        get;
+        set;
+    }
+    public string ConnectedOrgFriendlyName
+    {
+        get;
+        set;
+    }
+
+    protected ILogger Logger
+    {
+        get; set;
+    }
+
+    private bool IsCloneAvailable()
+    {
+        if (ParentCrmServiceClient == null)
         {
-            get;
-            set;
+            return false;
         }
 
-        private CrmServiceClient ParentCrmServiceClient
-        {
-            get;
-            set;
-        }
+        return (ParentCrmServiceClient.ActiveAuthenticationType == Microsoft.Xrm.Tooling.Connector.AuthenticationType.OAuth
+                      || ParentCrmServiceClient.ActiveAuthenticationType == Microsoft.Xrm.Tooling.Connector.AuthenticationType.ClientSecret
+                      || ParentCrmServiceClient.ActiveAuthenticationType == Microsoft.Xrm.Tooling.Connector.AuthenticationType.Certificate);
+    }
 
-        public Guid CallerId
-        {
-            get;
-            set;
-        }
+    public ManagedTokenOrganizationServiceProxy(string crmConnectionString, ILogger logger, Guid callerId, CrmServiceClient parentClient = null)
+    {
+        CrmConnectionString = crmConnectionString;
+        Logger = logger;
+        CallerId = callerId;
+        ParentCrmServiceClient = parentClient;
+        InitializeClient();
+    }
 
-        public string EndpointUrl
+    private void InitializeClient(bool forceReconnect = false)
+    {
+        if (forceReconnect)
         {
-            get;
-            set;
-        }
-
-        public string ActiveAuthenticationType
-        {
-            get;
-            set;
-        }
-        public string ConnectedOrgFriendlyName
-        {
-            get;
-            set;
-        }
-
-        protected ILogger Logger
-        {
-            get; set;
-        }
-
-        private bool IsCloneAvailable()
-        {
-            if (ParentCrmServiceClient == null)
+            if (ParentCrmServiceClient != null)
             {
-                return false;
+                ParentCrmServiceClient = new CrmServiceClient(CrmConnectionString);
             }
-
-            return (ParentCrmServiceClient.ActiveAuthenticationType == Microsoft.Xrm.Tooling.Connector.AuthenticationType.OAuth
-                          || ParentCrmServiceClient.ActiveAuthenticationType == Microsoft.Xrm.Tooling.Connector.AuthenticationType.ClientSecret
-                          || ParentCrmServiceClient.ActiveAuthenticationType == Microsoft.Xrm.Tooling.Connector.AuthenticationType.Certificate);
         }
 
-        public ManagedTokenOrganizationServiceProxy(string crmConnectionString, ILogger logger, Guid callerId, CrmServiceClient parentClient = null)
+        if (IsCloneAvailable())
         {
-            CrmConnectionString = crmConnectionString;
-            Logger = logger;
-            CallerId = callerId;
-            ParentCrmServiceClient = parentClient;
-            InitializeClient();
-        }
-
-        private void InitializeClient(bool forceReconnect = false)
-        {
-            if (forceReconnect)
+            Retry(() =>
             {
-                if (ParentCrmServiceClient != null)
+                CrmServiceClient = ParentCrmServiceClient.Clone();
+                if (CrmServiceClient.LastCrmException != null)
                 {
-                    ParentCrmServiceClient = new CrmServiceClient(CrmConnectionString);
+                    throw CrmServiceClient.LastCrmException;
                 }
-            }
-
-            if (IsCloneAvailable())
+                return true;
+            });
+        }
+        else
+        {
+            Retry(() =>
             {
-                Retry(() =>
+                CrmServiceClient = new CrmServiceClient(CrmConnectionString);
+                if (CrmServiceClient.LastCrmException != null)
                 {
-                    CrmServiceClient = ParentCrmServiceClient.Clone();
-                    if (CrmServiceClient.LastCrmException != null)
-                    {
-                        throw CrmServiceClient.LastCrmException;
-                    }
-                    return true;
-                });
-            }
-            else
-            {
-                Retry(() =>
-                {
-                    CrmServiceClient = new CrmServiceClient(CrmConnectionString);
-                    if (CrmServiceClient.LastCrmException != null)
-                    {
-                        throw CrmServiceClient.LastCrmException;
-                    }
-                    return true;
-                });
-            }
-
-            if (CallerId == null)
-            {
-                CallerId = CrmServiceClient.GetMyCrmUserId();
-            }
-
-            ActiveAuthenticationType = CrmServiceClient.ActiveAuthenticationType.ToString();
-            ConnectedOrgFriendlyName = CrmServiceClient.ConnectedOrgFriendlyName;
-            EndpointUrl = CrmServiceClient.ConnectedOrgPublishedEndpoints.Values.FirstOrDefault();
-        }
-
-        public Guid Create(Entity entity)
-        {
-            return Retry(() => { return CrmServiceClient.Create(entity); });
-        }
-
-        public Entity Retrieve(string entityName, Guid id, ColumnSet columnSet)
-        {
-            return Retry(() => { return CrmServiceClient.Retrieve(entityName, id, columnSet); });
-        }
-
-        public void Update(Entity entity)
-        {
-            Retry(() => { CrmServiceClient.Update(entity); return true; });
-        }
-
-        public void Delete(string entityName, Guid id)
-        {
-            Retry(() => { CrmServiceClient.Delete(entityName, id); return true; });
-        }
-
-        public OrganizationResponse Execute(OrganizationRequest request)
-        {
-            return Retry(() => { return CrmServiceClient.Execute(request); });
-        }
-
-        public void Associate(string entityName, Guid entityId, Relationship relationship, EntityReferenceCollection relatedEntities)
-        {
-            Retry(() => { CrmServiceClient.Associate(entityName, entityId, relationship, relatedEntities); return true; });
-        }
-
-        public void Disassociate(string entityName, Guid entityId, Relationship relationship, EntityReferenceCollection relatedEntities)
-        {
-            Retry(() => { CrmServiceClient.Disassociate(entityName, entityId, relationship, relatedEntities); return true; });
-        }
-
-        public EntityCollection RetrieveMultiple(QueryBase query)
-        {
-            return Retry(() => { return CrmServiceClient.RetrieveMultiple(query); });
-        }
-
-        /// <summary>
-        /// Run query expression with retry and pagination
-        /// </summary>
-        /// <param name="query"></param>
-        /// <returns></returns>
-        public EntityCollection RetrieveAll(QueryExpression query)
-        {
-            var results = new EntityCollection();
-            query.PageInfo.PageNumber = 1;
-
-            var moreRecords = true;
-            while (moreRecords)
-            {
-                var pageResults = RetrieveMultiple(query);
-                results.Entities.AddRange(pageResults.Entities);
-                query.PageInfo.PagingCookie = pageResults.PagingCookie;
-                query.PageInfo.PageNumber++;
-                moreRecords = pageResults.MoreRecords;
-            }
-            return results;
-        }
-
-        public void Dispose() => CrmServiceClient.Dispose();
-
-        private T Retry<T>(Func<T> action)
-        {
-            var tries = 3;
-            while (true)
-            {
-                try
-                {
-                    var result = action();
-                    return result;
+                    throw CrmServiceClient.LastCrmException;
                 }
-                catch (Exception ex) when (ex is SecurityTokenValidationException || ex is ExpiredSecurityTokenException || ex is SecurityAccessDeniedException || ex is SecurityNegotiationException)
+                return true;
+            });
+        }
+
+        if (CallerId == null)
+        {
+            CallerId = CrmServiceClient.GetMyCrmUserId();
+        }
+
+        ActiveAuthenticationType = CrmServiceClient.ActiveAuthenticationType.ToString();
+        ConnectedOrgFriendlyName = CrmServiceClient.ConnectedOrgFriendlyName;
+        EndpointUrl = CrmServiceClient.ConnectedOrgPublishedEndpoints.Values.FirstOrDefault();
+    }
+
+    public Guid Create(Entity entity)
+    {
+        return Retry(() => { return CrmServiceClient.Create(entity); });
+    }
+
+    public Entity Retrieve(string entityName, Guid id, ColumnSet columnSet)
+    {
+        return Retry(() => { return CrmServiceClient.Retrieve(entityName, id, columnSet); });
+    }
+
+    public void Update(Entity entity)
+    {
+        Retry(() => { CrmServiceClient.Update(entity); return true; });
+    }
+
+    public void Delete(string entityName, Guid id)
+    {
+        Retry(() => { CrmServiceClient.Delete(entityName, id); return true; });
+    }
+
+    public OrganizationResponse Execute(OrganizationRequest request)
+    {
+        return Retry(() => { return CrmServiceClient.Execute(request); });
+    }
+
+    public void Associate(string entityName, Guid entityId, Relationship relationship, EntityReferenceCollection relatedEntities)
+    {
+        Retry(() => { CrmServiceClient.Associate(entityName, entityId, relationship, relatedEntities); return true; });
+    }
+
+    public void Disassociate(string entityName, Guid entityId, Relationship relationship, EntityReferenceCollection relatedEntities)
+    {
+        Retry(() => { CrmServiceClient.Disassociate(entityName, entityId, relationship, relatedEntities); return true; });
+    }
+
+    public EntityCollection RetrieveMultiple(QueryBase query)
+    {
+        return Retry(() => { return CrmServiceClient.RetrieveMultiple(query); });
+    }
+
+    /// <summary>
+    /// Run query expression with retry and pagination
+    /// </summary>
+    /// <param name="query"></param>
+    /// <returns></returns>
+    public EntityCollection RetrieveAll(QueryExpression query)
+    {
+        var results = new EntityCollection();
+        query.PageInfo.PageNumber = 1;
+
+        var moreRecords = true;
+        while (moreRecords)
+        {
+            var pageResults = RetrieveMultiple(query);
+            results.Entities.AddRange(pageResults.Entities);
+            query.PageInfo.PagingCookie = pageResults.PagingCookie;
+            query.PageInfo.PageNumber++;
+            moreRecords = pageResults.MoreRecords;
+        }
+        return results;
+    }
+
+    public void Dispose() => CrmServiceClient.Dispose();
+
+    private T Retry<T>(Func<T> action)
+    {
+        var tries = 3;
+        while (true)
+        {
+            try
+            {
+                var result = action();
+                return result;
+            }
+            catch (Exception ex) when (ex is SecurityTokenValidationException || ex is SecurityTokenExpiredException || ex is SecurityAccessDeniedException || ex is SecurityNegotiationException)
+            {
+                if (--tries == 0)
                 {
-                    if (--tries == 0)
-                    {
-                        throw;
-                    }
-                    InitializeClient(true);
+                    throw;
                 }
-                catch (FaultException<OrganizationServiceFault> e) when (TransientIssueManager.IsTransientError(e))
+                InitializeClient(true);
+            }
+            catch (FaultException<OrganizationServiceFault> e) when (TransientIssueManager.IsTransientError(e))
+            {
+                if (--tries == 0)
                 {
-                    if (--tries == 0)
-                    {
-                        throw;
-                    }
-                    TransientIssueManager.ApplyDelay(e, Logger);
+                    throw;
                 }
-                catch (Exception ex) when (TransientIssueManager.IsTransientError(ex))
+                TransientIssueManager.ApplyDelay(e, Logger);
+            }
+            catch (Exception ex) when (TransientIssueManager.IsTransientError(ex))
+            {
+                if (--tries == 0)
                 {
-                    if (--tries == 0)
-                    {
-                        throw;
-                    }
-                    TransientIssueManager.ApplyDelay(Logger);
+                    throw;
                 }
+                TransientIssueManager.ApplyDelay(Logger);
             }
         }
     }
